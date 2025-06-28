@@ -24,12 +24,9 @@ template <std::size_t MaxSize>
 using block_config = std::pair <std::size_t, 
     std::integral_constant<std::size_t, MaxSize>>;
 
-std::mutex id_lock;
-static uint64_t GenerateId() {
-    std::scoped_lock lock(id_lock);
-    static uint64_t id {0};
-    ++id;
-    return id;
+static std::atomic<uint64_t> id {0};
+static uint64_t GenerateId() {    
+    return id.fetch_add(1, std::memory_order_acq_rel);
 }
 
 struct IBlockGroupProxy{
