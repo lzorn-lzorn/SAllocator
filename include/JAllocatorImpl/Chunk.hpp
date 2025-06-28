@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
@@ -25,7 +26,7 @@ using block_config = std::pair <std::size_t,
     std::integral_constant<std::size_t, MaxSize>>;
 
 static std::atomic<uint64_t> id {0};
-static uint64_t GenerateId() {    
+static uint64_t GenerateBlockId() {    
     return id.fetch_add(1, std::memory_order_acq_rel);
 }
 
@@ -46,12 +47,18 @@ struct BlockGroupProxy : IBlockGroupProxy {
 template <std::size_t Size>
 struct Block{
 public:
+    struct Info {
+        void * addr;
+        uint64_t id; 
+        bool is_free;
+    };
+public:
     static constexpr std::size_t mem_size = Size;
 public:
     void * mem;
-    const uint64_t id;
     Block<Size>* next;
     Block<Size>* prev;
+    const uint64_t id;
 public:
     explicit Block(uint64_t id) {
         id = id;
@@ -66,7 +73,22 @@ public:
             ResetPtr();
         }
     }
+    Info& GetInfo() const {
+        return { .addr = mem, .id = this->id, .is_free = is_free.load(std::memory_order_acquire) }; 
+    }
+    bool IsFree() const {
+        // 保证之后的读写操作不会被重排到此之前, 防止读到错误数据
+        return is_free.load(std::memory_order_acquire);
+    }
+    void MarkAsUsed() {
+        // 保证之前的读写操作不会被重排到此之后, 防止写入时错误覆盖
+        is_free.store(false, std::memory_order_release);
+    }
+    void MarkAsFree() {
+        is_free.store(true, std::memory_order_release);
+    }
 private:
+    std::atomic<bool> is_free {true};
     void ResetPtr(){
         next = nullptr;
         prev = nullptr;
@@ -85,8 +107,9 @@ private:
 public:
     BlockGroup(){
         if (!head) [[likely]]{
-            auto id = GenerateId();
+            auto id = GenerateBlockId();
             head = Block<BlockSize>(id);
+            head->MarkAsFree();
             tail = head;
         } 
     }
@@ -95,7 +118,21 @@ public:
     BlockGroup(BlockGroup&&) = delete;
     ~BlockGroup() {
     }
+
+    // @function 往内存链表中, 插入内存块
+    // @return 返回信息
+    Block<BlockSize>::Info Insert(Block<BlockSize>* block){
+        return {};
+    }
+    Block<BlockSize>::Info Remove(Block<BlockSize>* block){
+        return {};
+    }
+
+    Block<BlockSize>* Get(){
+        return {};
+    }
 };
+
     
 
 // 负责大规模的内存分配
