@@ -7,6 +7,7 @@
 #include <mutex>
 #include <type_traits>
 #include <functional>
+#include <unordered_map>
 #include <unordered_set>
 #include <bitset>
 #include <array>
@@ -98,12 +99,16 @@ private:
 template <std::size_t BlockSize, std::size_t MaxSize>
 struct BlockGroup{
 public:
+    using node_type = Block<BlockSize>;
+    using node_type_pointer = Block<BlockSize>*; 
     static constexpr std::size_t mem_size = BlockSize;
     static constexpr std::size_t max_size = MaxSize;
 private:
-    Block<BlockSize>* head {nullptr};
-    Block<BlockSize>* tail {nullptr};
+    node_type_pointer head {nullptr};
+    node_type_pointer tail {nullptr};
+    std::array<node_type_pointer, max_size> index2addr {nullptr};
     uint64_t cur_size;
+
 public:
     BlockGroup(){
         if (!head) [[likely]]{
@@ -121,15 +126,22 @@ public:
 
     // @function 往内存链表中, 插入内存块
     // @return 返回信息
-    Block<BlockSize>::Info Insert(Block<BlockSize>* block){
+    Block<BlockSize>::Info Insert(node_type_pointer block){
         return {};
     }
-    Block<BlockSize>::Info Remove(Block<BlockSize>* block){
+    Block<BlockSize>::Info Remove(node_type_pointer block){
         return {};
     }
 
-    Block<BlockSize>* Get(){
-        return {};
+    Block<BlockSize>* GetBlockOf(const uint64_t index){
+        return index2addr[index];
+    }
+
+    Block<BlockSize>* GetMemOf(const uint64_t index){
+        return index2addr[index]->mem;
+    }
+    uint64_t GetSize() const {
+        return cur_size;
     }
 };
 
