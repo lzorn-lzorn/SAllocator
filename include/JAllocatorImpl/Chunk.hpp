@@ -5,12 +5,14 @@
 #include <cstdlib>
 #include <memory>
 #include <mutex>
+#include <cstddef>
 #include <type_traits>
 #include <functional>
 #include <unordered_map>
 #include <unordered_set>
 #include <bitset>
 #include <array>
+#include <utility>
 #include <variant>
 
 #include "MemoryPoolConfig.hpp"
@@ -26,9 +28,29 @@ template <std::size_t MaxSize>
 using block_config = std::pair <std::size_t, 
     std::integral_constant<std::size_t, MaxSize>>;
 
+
 static std::atomic<uint64_t> id {0};
 static uint64_t GenerateBlockId() {    
     return id.fetch_add(1, std::memory_order_acq_rel);
+}
+
+// @function: 给定 void* addr 从而推算出其所属的成员变量
+// @usage: Block<64>* block = container_of<Block<64>>(addr, offsetof(Block<64>, mem));
+template<typename T, typename U>
+static T* container_of(U* ptr, size_t offset){
+    return reinterpret_cast<T*>(
+        reinterpret_cast<char*>(ptr) - offset
+    );
+}
+// @function: 给定 void* addr 从而推算出其所属的成员变量
+// @usage: Block<64>* block = container_of<Block<64>>(addr, &Block<64>::mem);
+template<typename T, typename U>
+static T* container_of(U* ptr, U T::*member){
+    return reinterpret_cast<std::ptrdiff_t>(
+        // const volatile 是为了让编译器禁止优化, 从而出现 UB
+        // 该指针只是 形式上的类型信息
+        &(reinterpret_cast<T const volatile*>(0)->*member)
+    );
 }
 
 struct IBlockGroupProxy{
@@ -43,6 +65,15 @@ struct BlockGroupProxy : IBlockGroupProxy {
 
     BlockGroupProxy()
         : group(MakeBlockGroup<BlockSize, MaxSize>()) {}
+
+    void Insert(Block<mem_size>* block){}
+
+    void Remove(void* ptr){
+        using block_type = Block<BlockSize>;
+        using block_ptr = Block<BlockSize>* ;
+        block_ptr mem_ptr = container_of<block_type>(ptr, offsetof(block_type, mem));
+        group.Remove(mem_ptr);
+    }
 };
 
 template <std::size_t Size>
@@ -61,8 +92,7 @@ public:
     Block<Size>* prev;
     const uint64_t id;
 public:
-    explicit Block(uint64_t id) {
-        id = id;
+    explicit Block(uint64_t id) : id(id) {
         mem = (void*)std::malloc(mem_size);
         ResetPtr();
     }
@@ -88,7 +118,11 @@ public:
     void MarkAsFree() {
         is_free.store(true, std::memory_order_release);
     }
-private:
+public:
+    // 虽然这里开放了 is_free 这变量, 因为 必要要求 Block 是满足 Standard Layout 
+    // 此时才能使用  reinterpret_cast 通过 void* addr 推算出 struct 的地址
+    // 所以不应该外部手动设置 is_free 
+    // 应该使用接口 void MarkAsFree() 和 void MarkAsUsed()
     std::atomic<bool> is_free {true};
     void ResetPtr(){
         next = nullptr;
@@ -152,7 +186,7 @@ struct Chunk{
     void * allocate(size_t size){
         return nullptr;
     }
-    void deallocate(void * ptr, size_t){
+    void deallocate(void * ptr, size_t size){
 
     }
     
