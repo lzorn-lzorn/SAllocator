@@ -22,10 +22,7 @@ constexpr uint32_t page = 4 << 10; // 页大小, 单位字节 4KB
 
 
 using mem_size_t = uint32_t;
-// size_class 的划分方式
-constexpr uint32_t small_alloc_bound = 130;
-constexpr uint32_t large_alloc_bound = 257;
-constexpr uint32_t huge_alloc_bound = 347;
+
 // 各个 size_class 的个数 (最值)
 constexpr uint32_t small_block_num = 10;
 constexpr uint32_t large_block_num = 10;
@@ -33,12 +30,21 @@ constexpr uint32_t huge_block_num = 5;
 constexpr uint32_t page_byte_size = 4 << 10;    // 4KB
 constexpr uint32_t big_page_btye_size = 4 << 20;// 4MB
       
+enum class AllocType {
+    Small,  // comment: 小内存分配模式( x <= 4KB)
+    Large,  // comment: 中规模内存分配模式( 4KB <= x <= 4MB)
+    Huge,   // comment: 中规模内存分配模式( 4MB <= x )
+};
+
+
 // MaxSize 这么大的块, 有MaxNum块
 template <std::size_t MaxSize, std::size_t MaxNum>
 struct MemConfig{
     constexpr static std::size_t size = MaxSize;
     constexpr static std::size_t max_num =  MaxNum;
 };
+
+
 
 static constexpr std::tuple<
     MemConfig<1, 8192>, 
@@ -171,3 +177,5 @@ static constexpr std::tuple<
     MemConfig<32*big_page_btye_size, 16>,
     MemConfig<64*big_page_btye_size, 8>
 > MemPoolConfig;
+
+
