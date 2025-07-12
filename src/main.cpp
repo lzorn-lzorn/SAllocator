@@ -5,6 +5,8 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "../include/JAllocatorImpl/SysApi.h"
+
 using namespace Stellatus;
 
 constexpr size_t N = 10'000'000;
@@ -98,4 +100,26 @@ int main() {
     //         return p;
     //     },
     //     [](void* p) { std::free(p); });
+    try {
+        // 分配256MB内存，自动尝试大页
+        void* mem = OSAllocator::OS_Alloc(256 * 1024 * 1024);
+        
+        if (mem) {
+            std::cout << "Successfully allocated memory at " << mem << std::endl;
+            OSAllocator::OS_Free(mem, 256 * 1024 * 1024);
+        }
+        
+        // 测试无效对齐
+        try {
+            void* bad_mem = OSAllocator::OS_Alloc(1024, 3); // 非2的幂次方对齐
+        } catch (const std::invalid_argument& e) {
+            std::cerr << "Invalid argument: " << e.what() << std::endl;
+        }
+        
+    } catch (const std::bad_alloc& e) {
+        std::cerr << "Memory allocation failed: " << e.what() << std::endl;
+        return 1;
+    }
+    
+    return 0;
 }
