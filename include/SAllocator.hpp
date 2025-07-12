@@ -121,7 +121,7 @@ private:
     std::mutex mtx;
     std::array<Chunk*, NUM_FAST_BINS> fastbins{};
 
-    static constexpr size_t size_to_index(size_t size) {
+    static size_t size_to_index(size_t size) {
         return (align_up(size) / ALIGNMENT) - 1;
     }
 };

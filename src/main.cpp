@@ -100,6 +100,7 @@ int main() {
     //         return p;
     //     },
     //     [](void* p) { std::free(p); });
+    std::cout << "Test Start:\n";
     try {
         // 分配256MB内存，自动尝试大页
         void* mem = OSAllocator::OS_Alloc(256 * 1024 * 1024);

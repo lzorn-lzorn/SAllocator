@@ -1,5 +1,4 @@
 
-#include "SysApi.h"
 #include <corecrt_malloc.h>
 #include <errhandlingapi.h>
 #include <memoryapi.h>
@@ -8,6 +7,7 @@
 #include <sysinfoapi.h>
 #include <windows.h>
 #include <winnt.h>
+#include "../include/JAllocatorImpl/SysApi.h"
 
 namespace {
     int GetNativeProtection(OSAllocator::Protection prot){
@@ -26,6 +26,7 @@ namespace {
 }
 
 namespace OSAllocator {
+    static size_t error = -1;
     size_t GetPageSize(){
         static size_t page_size = 0;
         if (page_size == 0){
@@ -39,7 +40,7 @@ namespace OSAllocator {
         }
         return page_size;
     }
-    void * OS_Alloc(size_t size, size_t alignment, size_t* error_code=nullptr){
+    void * OS_Alloc(size_t size, size_t alignment){
         if (size == 0) return nullptr;
 
         // 确保按照 2的幂次 对齐
@@ -74,7 +75,7 @@ namespace OSAllocator {
                 */
                 );
                 if (ptr) return ptr;
-                else *error_code = GetLastError();
+                else error = GetLastError();
             #elif defined(__linux__)
                 void *ptr = mmap(
                     nullptr, // 通常为 NULL, 系统自动选择
@@ -94,8 +95,8 @@ namespace OSAllocator {
                 if (ptr != MAP_FAILED) return ptr;
                 else{
                     perror("Big Page Alloc Failed!");
-                    *error = errno;
-                    std::cerr << strerror(*error);
+                    error = errno;
+                    std::cerr << strerror(error);
                 }
             #endif
         }
