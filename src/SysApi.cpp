@@ -1,13 +1,5 @@
-
-#include <corecrt_malloc.h>
-#include <errhandlingapi.h>
-#include <memoryapi.h>
-#include <new>
-#include <stdexcept>
-#include <sysinfoapi.h>
-#include <windows.h>
-#include <winnt.h>
 #include "../include/JAllocatorImpl/SysApi.h"
+#include <cstdint>
 
 namespace {
     int GetNativeProtection(OSAllocator::Protection prot){
@@ -40,15 +32,49 @@ namespace OSAllocator {
         }
         return page_size;
     }
+
+    static size_t NextPowerOfTwo(size_t x) {
+        // 位运算展开填满所有低位的 1，再加 1 得到下一个 2 的幂。
+        if (x == 0) return 1;
+        x--;
+        x |= x >> 1;
+        x |= x >> 2;
+        x |= x >> 4;
+        x |= x >> 8;
+        x |= x >> 16;
+    #if SIZE_MAX > UINT32_MAX
+        x |= x >> 32; // 64-bit平台支持
+    #endif
+        return x + 1;
+    }
+
+
     void * OS_Alloc(size_t size, size_t alignment){
-        if (size == 0) return nullptr;
+        if (size == 0) [[unlikely]] return nullptr;
+        // assert(alignment >= sizeof(void*) && "alignment must be at least sizeof(void*)");
+
+        alignment = alignment > sizeof(void*) ? alignment : sizeof(void*);
 
         // 确保按照 2的幂次 对齐
-        if ((alignment & (alignment - 1)) != 0){
-            alignment = 16; // 默认对齐16字节
+        // note: 以下是一个 2 的幂次经典技巧:
+        // note: (x>0)^(x&(x-1)) == 0 <-iff-> x 是 2 的幂
+        if ((alignment & (alignment - 1)) != 0) [[unlikely]] {
+            // 默认对齐不: 小于输入值的最小的 2 的幂, 即向上取整到最近的 2 的幂
+            // alignment = NextPowerOfTwo(alignment);
+            // C++20 本身有 NextPowerOfTwo 的实现 -- bit_ceil
+            // alignment = std::bit_ceil(alignment);
+            alignment = 16;
         }
 
+        #ifdef _WIN32
+            SYSTEM_INFO sys_info;
+            GetSystemInfo(&sys_info);
+            alignment = alignment > sys_info.dwAllocationGranularity ? 
+                alignment : sys_info.dwAllocationGranularity;
+        #endif
+
         // 大页分配阈值为 2MB
+        size_t page_size = GetPageSize();
         constexpr size_t HUGE_PAGE_THRESHOLD = 2 * 1024 * 1024;
         // 大页面分配(开启大页分配往往需要系统权限)
         // Linux: 通常需要 root 或 /proc/sys/vm/nr_hugepages 设置
@@ -75,7 +101,8 @@ namespace OSAllocator {
                 */
                 );
                 if (ptr) return ptr;
-                else error = GetLastError();
+                error = GetLastError();
+                std::cerr << "VirtualAlloc failed with error: " << error << "\n";
             #elif defined(__linux__)
                 void *ptr = mmap(
                     nullptr, // 通常为 NULL, 系统自动选择
@@ -93,68 +120,108 @@ namespace OSAllocator {
                     0        // 映射文件的起始偏移
                 );
                 if (ptr != MAP_FAILED) return ptr;
-                else{
-                    perror("Big Page Alloc Failed!");
-                    error = errno;
-                    std::cerr << strerror(error);
-                }
+                error = errno;
+                std::cerr << "mmap failed with error: " << strerror(error) << "\n";
             #endif
         }
 
+        // 小内存分配路径
+        if (size < page_size) {
         #ifdef _WIN32
-            void *ptr = VirtualAlloc(
+            return _aligned_malloc(size, alignment);
+        #else
+            return std::aligned_alloc(
+                alignment, 
+                ((size + alignment - 1) / alignment) * alignment
+            );
+        #endif
+        }
+
+        // 正常页面分配:
+        // size_t header_size = sizeof(AllocHeader);
+        size_t header_size = (sizeof(AllocHeader) + alignment - 1) & ~(alignment - 1);
+        size_t total_size = size + alignment + header_size;
+        void *base_ptr = nullptr;
+        bool is_fail = false;
+        #ifdef _WIN32
+            base_ptr = VirtualAlloc(
                 nullptr,
-                size, 
+                total_size, 
                 MEM_COMMIT | MEM_RESERVE, 
                 PAGE_READWRITE
             );
-            bool is_fail = !ptr;
-            size_t align__ = 16;
+            is_fail = !base_ptr;
+            // size_t align__ = 16;
         #else
-            void *ptr = mmap(
+            base_ptr = mmap(
                 nullptr,
-                size,
+                total_size,
                 PROT_READ | PROT_WRITE,
                 MAP_PRIVATE | MAP_ANONYMOUS,
                 -1, 
                 0
             );
-            bool is_fail = (ptr == MAP_FAILED);
-            size_t align__ = GetPageSize();
+            is_fail = (base_ptr == MAP_FAILED);
+            // size_t align__ = GetPageSize();
         #endif
         // 处理对齐
-        if (is_fail)
+        if (is_fail){
+            //std::cerr << "正常内存页面分配失败\n";
             throw std::bad_alloc();
-
-        if (alignment > align__){
-            void *align_ptr = _aligned_malloc(size, alignment);
-            if(align_ptr){
-                #ifdef _WIN32
-                    VirtualFree(ptr, 0, MEM_RELEASE);
-                #else
-                    munmap(ptr, size);
-                #endif
-                return align_ptr;
-            }
         }
-        return ptr;
+        //std::cerr << "正常内存页面分配成功\n";
+        // 指针对齐
+        // note: 将原始地址 raw_addr 向上对齐到 alignment
+        // note: aliged_addr = math.floor((raw_addr + alignment - 1)/alignment) * alignment
+        // note: 等价于: (raw_addr + alignment - 1) & ~(alignment - 1)
+        // note: Eg: raw_addr = 1000, alignment = 64
+        // note: 1000 + 63 = 1063, 二进制为 100001100111
+        // note: alignment - 1 = 63 = 000000111111
+        // note: ~63 = 0xFFFFFFC0
+        // note: 所以 1063 & 0xFFFFFFC0 = 1024，即对齐到下一个 64 倍数
+        uintptr_t raw_addr = reinterpret_cast<uintptr_t>(base_ptr);
+        uintptr_t aligned_addr = (raw_addr + alignment - 1) & ~(alignment - 1);
+        void* aligned_ptr = reinterpret_cast<void*>(aligned_addr);
+
+        uintptr_t header_addr = aligned_addr - sizeof(AllocHeader);
+        if (header_addr < raw_addr) {
+            // 如果 header 会低于 base_ptr，调整对齐方式
+            aligned_addr = (raw_addr + alignment + sizeof(AllocHeader) - 1) & ~(alignment - 1);
+            aligned_ptr = reinterpret_cast<void*>(aligned_addr);
+            header_addr = aligned_addr - sizeof(AllocHeader);
+        }
+        // 记录头部信息
+        auto* header = reinterpret_cast<AllocHeader*>(aligned_addr - header_size);
+        header->base_ptr = base_ptr;
+        header->total_size = total_size;
+  
+        return aligned_ptr;
     }
 
     void OS_Free(void *ptr, size_t size){
         if (!ptr) return;
 
+        size_t page_size = GetPageSize();
+
+        if (size < page_size) {
         #ifdef _WIN32
-            if(size > 0 && size % GetPageSize() != 0){
-                _aligned_free(ptr);
-            }else{
-                VirtualFree(ptr, 0, MEM_RELEASE);
-            }
+            _aligned_free(ptr);
         #else
-            if (size > 0 && size % GetPageSize() != 0){
-                free(ptr);
-            }else{
-                munmap(ptr, size);
-            }
+            std::free(ptr);
         #endif
+            return;
+        } 
+
+        auto* header = reinterpret_cast<AllocHeader*>(
+            reinterpret_cast<uintptr_t>(ptr) - sizeof(AllocHeader)
+        );
+        void* base_ptr = header->base_ptr;
+        size_t total_size = header->total_size;
+        #ifdef _WIN32
+            VirtualFree(base_ptr, 0, MEM_RELEASE);
+        #else
+            munmap(base_ptr, total_size);
+        #endif
+        
     }
 }

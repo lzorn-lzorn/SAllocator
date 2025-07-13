@@ -4,8 +4,9 @@
 #include <vector>
 #include <cstdlib>
 #include <cstring>
-
+#include <cassert>
 #include "../include/JAllocatorImpl/SysApi.h"
+
 
 using namespace Stellatus;
 
@@ -81,46 +82,60 @@ struct AProxy : Proxy{
     }
     A<Ty, Num> m_a;
 };
+using namespace OSAllocator;
+
+bool is_aligned(void* ptr, size_t alignment) {
+    return reinterpret_cast<uintptr_t>(ptr) % alignment == 0;
+}
+
+void test_allocation(size_t size, size_t alignment) {
+    std::cout << "Allocating " << size << " bytes with alignment " << alignment << " ... ";
+
+    void* ptr = OS_Alloc(size, alignment);
+    // assert(ptr != nullptr && "OS_Alloc returned nullptr");
+    // assert(is_aligned(ptr, alignment) && "Returned pointer is not aligned");
+
+    // 写入测试：将整块内存置为某个值，检查可写性
+    std::memset(ptr, 0xAB, size);
+
+    // 读回测试：检查内容是否一致
+    unsigned char* byte_ptr = static_cast<unsigned char*>(ptr);
+    for (size_t i = 0; i < size; ++i) {
+        assert(byte_ptr[i] == 0xAB);
+    }
+
+    // 释放
+    OS_Free(ptr, size);
+
+    std::cout << "OK\n";
+}
 
 int main() {
+    std::cout << "========== OS_Alloc / OS_Free Test ==========\n";
 
-
-    // test_alloc<SAllocator<char>>("SAllocator");
-    // test_alloc<std::allocator<char>>("std::allocator");
-
-    // test_large_alloc("Stellutas malloc 8GB",
-    //     [] { return tls_arena.allocate(LARGE_SIZE); },
-    //     [](void* p) { tls_arena.deallocate(p, LARGE_SIZE); });
-
-    // test_large_alloc("std::malloc 8GB",
-    //     [] {
-    //         void* p = std::malloc(LARGE_SIZE);
-    //         for (size_t offset = 0; offset < LARGE_SIZE; offset += 4096)
-    //             static_cast<char*>(p)[offset] = 0xCD; // 强制写入每一页
-    //         return p;
-    //     },
-    //     [](void* p) { std::free(p); });
-    std::cout << "Test Start:\n";
-    try {
-        // 分配256MB内存，自动尝试大页
-        void* mem = OSAllocator::OS_Alloc(256 * 1024 * 1024);
-        
-        if (mem) {
-            std::cout << "Successfully allocated memory at " << mem << std::endl;
-            OSAllocator::OS_Free(mem, 256 * 1024 * 1024);
-        }
-        
-        // 测试无效对齐
-        try {
-            void* bad_mem = OSAllocator::OS_Alloc(1024, 3); // 非2的幂次方对齐
-        } catch (const std::invalid_argument& e) {
-            std::cerr << "Invalid argument: " << e.what() << std::endl;
-        }
-        
-    } catch (const std::bad_alloc& e) {
-        std::cerr << "Memory allocation failed: " << e.what() << std::endl;
-        return 1;
-    }
     
+    std::vector<size_t> alignments = {1, 2, 3, 17, 32, 64, 128, 256, 1024};
+    std::vector<size_t> sizes = {
+        0,        // edge case
+        1,        // small
+        100,      // below page size
+        4096,     // page-aligned
+        8192,     // multi-page
+        2 * 1024 * 1024,        // huge page threshold
+        4 * 1024 * 1024 + 123,  // above huge page threshold
+    };
+
+    for (auto align : alignments) {
+        for (auto sz : sizes) {
+            try {
+                test_allocation(sz, align);
+            } catch (const std::exception& e) {
+                std::cerr << "FAILED: " << e.what() << "\n";
+            }
+        }
+    }
+
+    std::cout << "========== All Tests Passed ==========\n";
     return 0;
 }
+

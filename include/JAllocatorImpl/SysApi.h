@@ -3,7 +3,11 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstddef>
-
+#include <stdexcept>
+#include <new>
+#include <bit>
+#include <iostream>
+#include <algorithm>
 #if defined(_WIN32)
     #include <windows.h>
     #include <winnt.h>
@@ -16,6 +20,7 @@
     #include <unistd.h>
     #ifdef __linux__
         #include <sys/sysinfo.h>
+        #include <errno.h>
     #endif
 #endif
 
@@ -36,6 +41,18 @@
     #define MEM_NATIVE_PROT_NO_ACCESS         PROT_NONE
 #endif
 
+#ifdef NDEBUG
+    #define CHECK_ALIGNMENT(x) (true)
+#else
+    #define CHECK_ALIGNMENT(x)                                      \
+        ([](std::size_t __chk_align) constexpr {                    \
+            static_assert(__chk_align > 0, "Alignment must be > 0");\
+            static_assert((__chk_align & (__chk_align - 1)) == 0,   \
+                          "Alignment must be a power of 2");        \
+            return true;                                            \
+        }(x))
+#endif
+
 
 namespace OSAllocator {
     // 内存保护标志
@@ -45,6 +62,11 @@ namespace OSAllocator {
         READ_EXECUTE,
         READ_WRITE_EXECUTE,
         NO_ACCESS
+    };
+
+    struct AllocHeader{
+        void * base_ptr;
+        size_t total_size;
     };
 
     // 原有基础API
@@ -59,22 +81,22 @@ namespace OSAllocator {
     bool OS_UnlockMemory(void* ptr, size_t size); // 解锁内存
 }
 
-inline void* OS_Alloc(size_t size) {
-    #if defined(_WIN32)
-        void* ptr = VirtualAlloc(nullptr, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-        if (ptr) std::memset(ptr, 0, size); // 强制触发物理页分配
-        return ptr;
-    #else
-        void* ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if (ptr != MAP_FAILED) std::memset(ptr, 0, size); // 强制触发物理页分配
-        return (ptr == MAP_FAILED) ? nullptr : ptr;
-    #endif
-}
+// inline void* OS_Alloc(size_t size) {
+//     #if defined(_WIN32)
+//         void* ptr = VirtualAlloc(nullptr, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+//         if (ptr) std::memset(ptr, 0, size); // 强制触发物理页分配
+//         return ptr;
+//     #else
+//         void* ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+//         if (ptr != MAP_FAILED) std::memset(ptr, 0, size); // 强制触发物理页分配
+//         return (ptr == MAP_FAILED) ? nullptr : ptr;
+//     #endif
+// }
     
-inline void OS_Free(void* ptr, size_t size) {
-#if defined(_WIN32)
-    VirtualFree(ptr, 0, MEM_RELEASE);
-#else
-    munmap(ptr, size);
-#endif
-}
+// inline void OS_Free(void* ptr, size_t size) {
+// #if defined(_WIN32)
+//     VirtualFree(ptr, 0, MEM_RELEASE);
+// #else
+//     munmap(ptr, size);
+// #endif
+// }
