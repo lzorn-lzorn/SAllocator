@@ -24,7 +24,6 @@
     #endif
 #endif
 
-
 #ifdef _WIN32
     #define MEM_NATIVE_PROT_READ_ONLY         PAGE_READONLY
     #define MEM_NATIVE_PROT_READ_WRITE        PAGE_READWRITE
@@ -41,44 +40,62 @@
     #define MEM_NATIVE_PROT_NO_ACCESS         PROT_NONE
 #endif
 
-#ifdef NDEBUG
-    #define CHECK_ALIGNMENT(x) (true)
+#ifdef _WIN32
+    #define OS_EXTRA_CHECK_ALIGNMENT(alignment) do{                                 \
+        SYSTEM_INFO sys_info;                                                       \
+        GetSystemInfo(&sys_info);                                                   \
+        assert((alignment) >= (sys_info.dwAllocationGranularity)                    \
+                && "Alignment must be >= system allocation granularity on Windows");\
+        printf(                                                                     \
+            "Alignment is %zu, and System allocation granularity is %zu",           \
+            static_cast<std::size_t>(alignment),                                    \
+            static_cast<std::size_t>(sys_info.dwAllocationGranularity)              \
+        );                                                                          \
+    }while(0)
 #else
-    #define CHECK_ALIGNMENT(x)                                      \
-        ([](std::size_t __chk_align) constexpr {                    \
-            static_assert(__chk_align > 0, "Alignment must be > 0");\
-            static_assert((__chk_align & (__chk_align - 1)) == 0,   \
-                          "Alignment must be a power of 2");        \
-            return true;                                            \
-        }(x))
+    #include <unistd.h>
+    #define OS_EXTRA_CHECK_ALIGNMENT(alignment) do {                                \
+        std::size_t page_size = static_cast<std::size_t>(sysconf(_SC_PAGESIZE));    \
+        assert(                                                                     \
+            (alignment) >= page_size &&                                             \
+            "Alignment must be >= system page size on POSIX systems"                \
+        );                                                                          \
+        printf("Alignment = %zu, System page size = %zu\n",                         \
+            static_cast<size_t>(alignment), page_size);                             \
+    }while(0)
+#endif 
+
+
+#ifdef NDEBUG
+    #define CHECK_ALIGNMENT(alignment) ((void)0)
+#else /* 检查是否为2的幂且大于0 */ 
+    #define CHECK_ALIGNMENT(alignment) do {                                         \
+        assert(((alignment) > 0) && (((alignment) & ((alignment) - 1)) == 0)        \
+            && "Alignment must be a power of 2 and greater than 0");                \
+        OS_EXTRA_CHECK_ALIGNMENT(alignment);                                        \
+    } while(0)
 #endif
 
 
 namespace OSAllocator {
-    // 内存保护标志
-    enum class Protection {
-        READ_ONLY,
-        READ_WRITE,
-        READ_EXECUTE,
-        READ_WRITE_EXECUTE,
-        NO_ACCESS
-    };
-
     struct AllocHeader{
         void * base_ptr;
         size_t total_size;
     };
-
-    // 原有基础API
-    void* OS_Alloc(size_t size, size_t alignment = 16);
+    /*
+     * @function: 封装 OS 底层的内存分配接口
+     * @param: size 字节数 
+     * @param: alignment 对齐值, 默认是 alignof(std::max_align_t)
+     * @note: Release 下不做任何检查, 
+     * @note: Debug 要求: alignment 是 2的幂次 && 大于零
+     * @note:    Windows 下不能超过 dwAllocationGranularity, 一般是 64KB (VirtualAlloc)
+     * @note:    Linux   下不能超过要一个 page_size, 一般是 4KB (mmap)
+    */
+    void* OS_Alloc(size_t size, size_t alignment = alignof(std::max_align_t));
+    void* OS_AllocBigPage(size_t size, size_t alignment = alignof(std::max_align_t));
     void OS_Free(void* ptr, size_t size = 0);
     size_t GetPageSize();
-    
-    // 新增高级功能API
-    void* OS_AllocLargePages(size_t size); // 大页分配
-    bool OS_SetProtection(void* ptr, size_t size, Protection prot); // 内存保护
-    bool OS_LockMemory(void* ptr, size_t size); // 锁定内存(防止交换)
-    bool OS_UnlockMemory(void* ptr, size_t size); // 解锁内存
+
 }
 
 // inline void* OS_Alloc(size_t size) {
